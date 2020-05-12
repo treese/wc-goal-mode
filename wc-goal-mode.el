@@ -2,8 +2,8 @@
 ;;
 ;; Author: Benjamin Beckwith
 ;; Created: 2010-6-19
-;; Version: 2.1
-;; Last-Updated: 2014-08-28
+;; Version: 2.2
+;; Last-Updated: 2020-05-12
 ;; URL: https://github.com/bnbeckwith/wc-goal-mode
 ;; Keywords:
 ;; Compatability:
@@ -21,7 +21,8 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;
 ;;; Change Log:
-;; 
+;;
+;; 2.2 Update only when not in the middle of a word
 ;; 2.1 Get rid of compilation warnings
 ;; 2.0 Name change from wc-mode to wc-goal-mode
 ;; 1.3 Goal functions now perform reset by default
@@ -128,6 +129,13 @@ It will looks something like WC[742+360/1100] in the modeline.
 (make-variable-buffer-local 'wc-goal-word-goal)
 (make-variable-buffer-local 'wc-goal-line-goal)
 (make-variable-buffer-local 'wc-goal-char-goal)
+
+(defvar-local wc-goal-latest-char-count 0
+  "Most recent count of characters.")
+(defvar-local wc-goal-latest-word-count 0
+  "Most recent count of characters.")
+(defvar-local wc-goal-latest-line-count 0
+  "Most recent count of characters.")
 
 (defvar wc-goal-count-chars-function
   (function (lambda (rstart rend)
@@ -255,10 +263,13 @@ operate over the entire buffer.
               rend (region-end))
       (setq rstart (point-min)
             rend (point-max))))
-  (let ((wcount (funcall wc-goal-count-words-function rstart rend))
-        (lcount (funcall wc-goal-count-lines-function rstart rend))
-        (ccount (funcall wc-goal-count-chars-function rstart rend)))
-    (when (called-interactively-p 'interactive) 
+  (let ((wcount (when wc-goal-count-words-function
+                  (funcall wc-goal-count-words-function rstart rend)))
+        (lcount (when wc-goal-count-lines-function
+                  (funcall wc-goal-count-lines-function rstart rend)))
+        (ccount (when wc-goal-count-chars-function
+                  (funcall wc-goal-count-chars-function rstart rend))))
+    (when (called-interactively-p 'interactive)
       (message "%d line%s, %d word%s, %d char%s"
                lcount
                (if (= lcount 1) "" "s")
@@ -266,9 +277,18 @@ operate over the entire buffer.
                (if (= wcount 1) "" "s")
                ccount
                (if (= ccount 1) "" "s")))
+    (setq wc-goal-latest-line-count lcount)
+    (setq wc-goal-latest-word-count wcount)
+    (setq wc-goal-latest-char-count ccount)
     (if field
         (nth field (list lcount wcount ccount))
       (list lcount wcount ccount))))
+
+(defun wc-goal-update-counts-maybe ()
+  "Update stats when a non-word character is typed.
+Called from `post-self-insert-hook'."
+  (unless (equal ?w (char-syntax (char-before)))
+    (wc-goal-count)))
 
 (defalias 'wc 'wc-goal-count
   "Alias function `wc-goal-count' to the more legible `wc'.")
@@ -281,14 +301,15 @@ operate over the entire buffer.
 
 (defun wc-goal-mode-update ()
   "Return a string to update the modeline appropriately."
-  (let* ((stats (wc-goal-count (point-min) (point-max))))
-    (unless wc-goal-orig-lines (setq wc-goal-orig-lines (nth 0 stats)))
-    (unless wc-goal-orig-words (setq wc-goal-orig-words (nth 1 stats)))
-    (unless wc-goal-orig-chars (setq wc-goal-orig-chars (nth 2 stats)))
-    (setq wc-goal-lines-delta (- (nth 0 stats) wc-goal-orig-lines))
-    (setq wc-goal-words-delta (- (nth 1 stats) wc-goal-orig-words))
-    (setq wc-goal-chars-delta (- (nth 2 stats) wc-goal-orig-chars))
-    (wc-goal-generate-modeline)))
+  (unless wc-goal-orig-words
+    (wc-goal-count)
+    (setq wc-goal-orig-lines wc-goal-latest-line-count)
+    (setq wc-goal-orig-words wc-goal-latest-word-count)
+    (setq wc-goal-orig-chars wc-goal-latest-char-count))
+  (setq wc-goal-lines-delta (- wc-goal-latest-line-count wc-goal-orig-lines))
+  (setq wc-goal-words-delta (- wc-goal-latest-word-count wc-goal-orig-words))
+  (setq wc-goal-chars-delta (- wc-goal-latest-char-count wc-goal-orig-chars))
+  (wc-goal-generate-modeline))
 
 ;;;###autoload
 (define-minor-mode wc-goal-mode
@@ -307,7 +328,7 @@ highlight indicating that the goal has been reached.
 Commands:
 \\{wc-goal-mode-map}
 
-Entry to this mode calls the value of `wc-goal-mode-hook' if that
+Entry to this mode calls the value of `wc-goal-mode-hooks' if that
 value is non-nil."
   ;; initial value (off)
   :init-value nil
@@ -319,9 +340,11 @@ value is non-nil."
   :keymap wc-goal-mode-map
   ;; The mode body code
   (if wc-goal-mode
-      (run-mode-hooks 'wc-goal-mode-hooks)))
+      (progn
+        (add-hook 'post-self-insert-hook 'wc-goal-update-counts-maybe nil t)
+        (run-mode-hooks 'wc-goal-mode-hooks))
+    (delete 'wc-goal-mode-update-counts-maybe post-self-insert-hook)))
 
 (provide 'wc-goal-mode)
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; wc-goal-mode.el ends here
-
